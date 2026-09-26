@@ -29,10 +29,16 @@ Each session registers with a 7-char id and heartbeats every 5 s; sessions unsee
 
 Message content: first line is the title, the rest is the body (≤ 16 KiB), or JSON `{"title","content","mode"}`.
 
-- `mode: "normal"` (default) waits for a working recipient to finish its run.
-- `mode: "urgent"` interrupts a direct recipient's current run.
+Delivery by recipient state:
 
-Incoming messages are pushed into the session, so agents never need to poll the mailbox. Messages expire after 7 days.
+| Message | Idle recipient | Working recipient |
+|---|---|---|
+| direct, `normal` (default) | wakes it | follow-up: runs right after the current run |
+| direct, `urgent` | wakes it | interrupts the current run |
+| broadcast, `normal` | next prompt | next prompt |
+| broadcast, `urgent` | wakes it | follow-up: runs right after the current run |
+
+Messages are pushed into the session, so agents never need to poll the mailbox. Messages expire after 7 days.
 
 ## Slash command
 

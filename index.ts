@@ -59,14 +59,14 @@ read  mecca://session/count | /<id>
 read  mecca://mailbox[?page=N&unread]   page 1 = latest
 read  mecca://mailbox/<msgId> | /policy
 write mecca://mailbox                   broadcast; recipients see it next turn
-write mecca://mailbox/<sessionId>       direct; wakes an idle recipient
+write mecca://mailbox/<sessionId>       direct; wakes an idle recipient, follows up a working one
 write mecca://mailbox/policy            on | off | {"global":bool,"direct":bool,"urgent":bool}
 Message content: first line = title, rest = body (≤${MAX_CONTENT_BYTES} B); or {"title","content","mode"}.
-mode: "normal" (default) waits until a working recipient ends its run; "urgent" interrupts a direct recipient's run now.
-An urgent broadcast is handled like a regular direct message: it wakes idle recipients but never interrupts.
+mode: "normal" (default): a direct message follows up a working recipient (runs right after its current run); a normal broadcast waits for the recipient's next prompt.
+"urgent" interrupts a direct recipient's run now; an urgent broadcast is handled like a normal direct message (wakes idle, follows up working, never interrupts).
 Use urgent only when the recipient must act before finishing its current work.
 Reply only if asked. Reply chains past depth ${MAX_DEPTH} are rejected.
-Incoming messages are pushed into your session: the harness wakes you when a direct message arrives, and broadcasts land on your next turn.
+Incoming messages are pushed into your session: direct messages wake you or follow up your current run; normal broadcasts land on your next prompt.
 NEVER poll: do not loop sleep + read mecca://mailbox waiting for a reply. After sending, end your turn or continue other work.`;
 
 const DESCRIPTION =
@@ -258,8 +258,10 @@ export default function mecca(pi: ExtensionAPI): void {
   let liveCtx: Ctx | undefined;
   /** Deepest mecca direct message delivered into the current agent run; undefined when the run is user-driven only. */
   let turnDepth: number | undefined;
-  /** Non-urgent arrivals held while this session is working; flushed with a banner when the run ends. */
+  /** Normal broadcasts held while this session is working; flushed with a banner when the run ends. */
   const held: MessageRow[] = [];
+  /** Deepest direct message queued as a follow-up; becomes `turnDepth` of the run it starts. */
+  let pendingDepth: number | undefined;
 
   const titleOf = (): string => {
     const name = pi.getSessionName();
@@ -296,13 +298,13 @@ export default function mecca(pi: ExtensionAPI): void {
     return lines.join("\n");
   };
 
-  /** Injects a message into the session: `steer` interrupts the run (or starts one), `aside` joins the next step (or wakes), `nextTurn` waits for the next prompt. */
+  /** Injects a message into the session: `steer` interrupts the run (or starts one), `aside` joins the next step (or wakes), `followUp` runs right after the current run, `nextTurn` waits for the next prompt. */
   const present = (
     s: Store,
     me: string,
     ctx: Ctx,
     row: MessageRow,
-    deliverAs: "steer" | "aside" | "nextTurn",
+    deliverAs: "steer" | "aside" | "followUp" | "nextTurn",
     toast: boolean,
   ): void => {
     const senderTitle = (() => {
@@ -329,10 +331,13 @@ export default function mecca(pi: ExtensionAPI): void {
       depth: row.depth,
       mode: row.mode,
     };
-    if (row.kind === "direct") turnDepth = Math.max(turnDepth ?? 0, row.depth);
+    if (row.kind === "direct") {
+      if (deliverAs === "followUp") pendingDepth = Math.max(pendingDepth ?? 0, row.depth);
+      else turnDepth = Math.max(turnDepth ?? 0, row.depth);
+    }
     pi.sendMessage(
       { customType: CUSTOM_TYPE, content: text, display: true, details },
-      deliverAs === "steer" ? { deliverAs, triggerTurn: true } : { deliverAs },
+      deliverAs === "steer" || deliverAs === "followUp" ? { deliverAs, triggerTurn: true } : { deliverAs },
     );
     s.markRead(me, [row.seq]);
   };
@@ -344,12 +349,13 @@ export default function mecca(pi: ExtensionAPI): void {
       present(s, me, ctx, row, "steer", true);
       return;
     }
+    // An urgent broadcast is treated as a normal direct message: it wakes or follows up, but never interrupts.
+    const wakes = row.kind === "direct" || row.mode === "urgent";
     if (status === "working") {
-      held.push(row);
+      if (wakes) present(s, me, ctx, row, "followUp", true);
+      else held.push(row);
       return;
     }
-    // An urgent broadcast is treated as a regular direct message: it wakes an idle session but never interrupts.
-    const wakes = row.kind === "direct" || row.mode === "urgent";
     present(s, me, ctx, row, wakes ? "aside" : "nextTurn", true);
   };
 
@@ -401,6 +407,7 @@ export default function mecca(pi: ExtensionAPI): void {
       s.markOffline(meId);
     }
     turnDepth = undefined;
+    pendingDepth = undefined;
     held.length = 0;
     lastIntent = "";
     meId = s.claim({ ompSessionId, pid: process.pid, cwd: ctx.cwd, title: titleOf() });
@@ -433,9 +440,14 @@ export default function mecca(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_end", (event) => {
-    if ("willContinue" in event && event.willContinue === true) return;
+    const queued = pendingDepth;
+    pendingDepth = undefined;
+    if ("willContinue" in event && event.willContinue === true) {
+      if (queued !== undefined) turnDepth = Math.max(turnDepth ?? 0, queued);
+      return;
+    }
     status = "idle";
-    turnDepth = undefined;
+    turnDepth = queued;
     beat();
     flushHeld();
   });
