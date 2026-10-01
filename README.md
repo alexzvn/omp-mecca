@@ -24,7 +24,7 @@ Each session registers with a 7-char id and heartbeats every 5 s; sessions unsee
 | read | `mecca://mailbox[?page=N&unread]` | Inbox, page 1 = latest |
 | read | `mecca://mailbox/<msgId>` \| `mecca://mailbox/policy` | Message / notify policy |
 | write | `mecca://mailbox` | Broadcast; recipients see it next turn |
-| write | `mecca://mailbox/<sessionId>` | Direct; wakes an idle recipient |
+| write | `mecca://mailbox/<sessionId>` | Direct; wakes an idle recipient, joins a working one at its next step |
 | write | `mecca://mailbox/policy` | `on` \| `off` \| `{"global":bool,"direct":bool,"urgent":bool}` |
 
 Message content: first line is the title, the rest is the body (≤ 16 KiB), or JSON `{"title","content","mode"}`.
@@ -33,7 +33,7 @@ Delivery by recipient state:
 
 | Message | Idle recipient | Working recipient |
 |---|---|---|
-| direct, `normal` (default) | wakes it | follow-up: runs right after the current run |
+| direct, `normal` (default) | wakes it | injected at the next step boundary, without interrupting the current tool batch |
 | direct, `urgent` | wakes it | interrupts the current run |
 | broadcast, `normal` | next prompt | next prompt |
 | broadcast, `urgent` | wakes it | follow-up: runs right after the current run |
