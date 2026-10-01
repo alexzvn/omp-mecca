@@ -329,7 +329,6 @@ export default function mecca(pi: ExtensionAPI): void {
       depth: row.depth,
       mode: row.mode,
     };
-    if (row.kind === "direct") turnDepth = Math.max(turnDepth ?? 0, row.depth);
     pi.sendMessage(
       { customType: CUSTOM_TYPE, content: text, display: true, details },
       deliverAs === "steer" || deliverAs === "followUp" ? { deliverAs, triggerTurn: true } : { deliverAs },
@@ -430,6 +429,13 @@ export default function mecca(pi: ExtensionAPI): void {
   pi.on("tool_execution_start", (event) => {
     const intent = "intent" in event && typeof event.intent === "string" ? event.intent.trim() : "";
     lastIntent = intent || intentFrom("args" in event ? event.args : undefined) || event.toolName;
+  });
+
+  // Depth is recorded when the run takes in the message, so an aside that lands after the final step and starts a fresh run keeps its depth.
+  pi.on("message_start", (event) => {
+    const msg = event.message as { customType?: string; details?: Partial<MeccaDetails> };
+    if (msg.customType !== CUSTOM_TYPE || msg.details?.kind !== "direct" || typeof msg.details.depth !== "number") return;
+    turnDepth = Math.max(turnDepth ?? 0, msg.details.depth);
   });
 
   pi.on("agent_start", () => {
